@@ -165,9 +165,50 @@ def _remove_dark_outer_frame(mask: np.ndarray) -> np.ndarray:
         mask[-corner_size:, :corner_size],
         mask[-corner_size:, -corner_size:],
     )
-    dark_corners = sum(float(corner.mean()) >= 0.25 for corner in corners)
+    regular = (
+        type(mask) is np.ndarray
+        and mask.dtype == np.bool_
+        and min(height, width) >= corner_size
+    )
+    if regular:
+        dark_corners = sum(
+            np.count_nonzero(corner) * 4 >= corner.size for corner in corners
+        )
+    else:
+        dark_corners = sum(float(corner.mean()) >= 0.25 for corner in corners)
     if dark_corners < 3:
         return mask
+
+    if regular:
+        import cv2
+
+        remaining = mask.astype(np.uint8, order="C")
+        flood_mask = np.zeros((height + 2, width + 2), dtype=np.uint8)
+        removed = 0
+        for y_start, x_start in (
+            (0, 0),
+            (0, width - corner_size),
+            (height - corner_size, 0),
+            (height - corner_size, width - corner_size),
+        ):
+            corner = remaining[
+                y_start : y_start + corner_size, x_start : x_start + corner_size
+            ]
+            while True:
+                _, maximum, _, (x_offset, y_offset) = cv2.minMaxLoc(corner)
+                if not maximum:
+                    break
+                area, _, _, _ = cv2.floodFill(
+                    remaining,
+                    flood_mask,
+                    (x_start + x_offset, y_start + y_offset),
+                    0,
+                    flags=8,
+                )
+                removed += area
+        if removed < max(32, int(round(mask.size * 0.0005))):
+            return mask
+        return remaining.view(np.bool_)
 
     connected = np.zeros_like(mask, dtype=bool)
     pending: deque[tuple[int, int]] = deque()
